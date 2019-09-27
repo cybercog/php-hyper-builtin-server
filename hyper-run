@@ -1,6 +1,8 @@
 #!/usr/bin/env php
 <?php
 
+use React\Socket\ConnectionException;
+
 if (PHP_SAPI !== 'cli') {
     header('Content-Type: text/plain; charset=UTF-8', true, 400);
     exit("This script only works on php-cli.\n");
@@ -72,6 +74,32 @@ if (!$servers && !$secures) {
     exit(1);
 }
 
+function startListener($master, $listener): void
+{
+    $host = sprintf(
+        '%s://%s:%s',
+        $listener[2] ? 'https' : 'http', $listener[0], $listener[1]
+    );
+    fwrite(STDOUT, "Development server started: <{$host}>\n");
+
+    try {
+        call_user_func_array([$master, 'addListener'], $listener);
+    } catch (ConnectionException $exception) {
+        $reason = 'Address already in use';
+        if (strpos($exception->getMessage(), $reason)) {
+            fwrite(STDERR, sprintf(
+                "Failed to listen on %s:%s (reason: %s)\n",
+                $listener[0], $listener[1], $reason
+            ));
+
+            $listener[1] = (int) $listener[1] + 1;
+            startListener($master, $listener);
+        } else {
+            throw $exception;
+        }
+    }
+}
+
 try {
 
     if (!ctype_digit($number) || $number < 1 || $number > 20) {
@@ -108,19 +136,19 @@ try {
 
     $loop = React\EventLoop\Factory::create();
 
-    $used_processes = [];
+    $usedProcesses = [];
     $factory = new mpyw\HyperBuiltinServer\BuiltinServerFactory($loop);
     $factory
     ->createMultipleAsync($number, '127.0.0.1', $docroot, $router)
-    ->then(function (array $processes) use ($loop, $listeners, &$used_processes) {
-        $used_processes = $processes;
+    ->then(function (array $processes) use ($loop, $listeners, &$usedProcesses) {
+        $usedProcesses = $processes;
         $master = new mpyw\HyperBuiltinServer\Master($loop, $processes);
         foreach ($listeners as $listener) {
-            call_user_func_array([$master, 'addListener'], $listener);
+            startListener($master, $listener);
         }
     })
-    ->then(null, function ($e) use (&$used_processes) {
-        foreach ($used_processes as $process) {
+    ->then(null, function ($e) use (&$usedProcesses) {
+        foreach ($usedProcesses as $process) {
             $process->terminate();
         }
         throw $e;
